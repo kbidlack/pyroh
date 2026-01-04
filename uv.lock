@@ -1,0 +1,26 @@
+version = 1
+revision = 3
+requires-python = ">=3.14"
+
+[[package]]
+name = "iroh"
+version = "0.35.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/47/42/3ca27c758e491152fd402ec6e0497e889076dff8fb34f2f3991257ce593e/iroh-0.35.0-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:b08f2a25b6bc34f79998c7b42ff16a26f42c4423486ea1bfe5db895a5fadaf57", size = 10977157, upload-time = "2025-06-23T19:26:56.062Z" },
+    { url = "https://files.pythonhosted.org/packages/72/7d/05fa04f81c9e10f7e99c13073841765fdcdbdae9c4f725dd5e0f882015bb/iroh-0.35.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:e5297b4e733a4d980b2e7d4b5dd42d3329fc87c3bb3e52c3ad40e0edb3cc0d75", size = 10184001, upload-time = "2025-06-23T19:26:58.208Z" },
+    { url = "https://files.pythonhosted.org/packages/76/84/523a3e6bbd77ce6de55c7452b8025be72c8daba18084a4cc28204f4b9668/iroh-0.35.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:c09b987c5c9e71048af236d00d3ce15c73ff0a9ed872fddf75aba8691dd9c36d", size = 11286267, upload-time = "2025-06-23T19:27:01.504Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/01/afba5b09b5c7dbde2beee05a4e73656de4e3469f930524c15f17b96590f9/iroh-0.35.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:94657b606cf1aff2848cd97169f339ea145095cdf89e6aff22cfb9c868cca846", size = 11677036, upload-time = "2025-06-23T19:27:03.745Z" },
+    { url = "https://files.pythonhosted.org/packages/38/41/f6997897a9c46712bb9a94cee5487dfce8dc78d47a2b9f237f5ff3708908/iroh-0.35.0-py3-none-win_amd64.whl", hash = "sha256:e18fb474fa1ff9ae9c1b8bf4bc53d68ab636d5d1be852a57080bcbf6e9d58d92", size = 10778906, upload-time = "2025-06-23T19:27:05.913Z" },
+]
+
+[[package]]
+name = "pyroh"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "iroh" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "iroh", specifier = ">=0.35.0" }]

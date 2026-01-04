@@ -1,0 +1,13 @@
+[project]
+name = "pyroh"
+version = "0.1.0"
+description = "Provides asyncio-like StreamReader/StreamWriter interfaces for p2p connections."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "iroh>=0.35.0",
+]
+
+
+[tool.setuptools]
+py-modules = ["pyroh"]
