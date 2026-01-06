@@ -194,25 +194,55 @@ class StreamReader:
 class StreamWriter:
     """asyncio.StreamWriter-compatible interface for iroh send streams."""
 
-    __slots__ = ("_send", "_pending", "_closing")
+    __slots__ = ("_send", "_pending", "_closing", "_drain_task")
 
     def __init__(self, send: iroh.SendStream) -> None:
         self._send = send
         self._pending: list[bytes] = []
         self._closing = False
+        self._drain_task: asyncio.Task[None] | None = None
 
     def write(self, data: bytes) -> None:
-        """Buffer data for sending."""
+        """Buffer data for sending.
+
+        Like asyncio, this schedules an automatic drain when the event loop
+        gets a chance to run. Explicit drain() calls are still supported for
+        flow control.
+        """
         if self._closing:
             raise RuntimeError("Stream is closing")
         self._pending.append(data)
+        self._schedule_drain()
+
+    def _schedule_drain(self) -> None:
+        """Schedule a drain to happen when the event loop runs."""
+        if self._drain_task is None or self._drain_task.done():
+            self._drain_task = asyncio.create_task(self._auto_drain())
+
+    async def _auto_drain(self) -> None:
+        """Automatically drain after yielding to the event loop."""
+        # Yield control to allow batching of multiple write() calls
+        await asyncio.sleep(0)
+        if self._pending and not self._closing:
+            await self._send.write_all(b"".join(self._pending))
+            self._pending.clear()
 
     def writelines(self, lines: list[bytes]) -> None:
         """Buffer multiple byte strings."""
+        if self._closing:
+            raise RuntimeError("Stream is closing")
         self._pending.extend(lines)
+        self._schedule_drain()
 
     async def drain(self) -> None:
         """Flush buffered data to the stream."""
+        # Cancel any pending auto-drain to avoid double-writing
+        if self._drain_task is not None and not self._drain_task.done():
+            self._drain_task.cancel()
+            try:
+                await self._drain_task
+            except asyncio.CancelledError:
+                pass
         if self._pending:
             await self._send.write_all(b"".join(self._pending))
             self._pending.clear()
