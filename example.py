@@ -1,15 +1,17 @@
 import asyncio
+from asyncio import StreamReader, StreamWriter
 
 import pyroh
 
 
-async def echo_handler(reader: pyroh.StreamReader, writer: pyroh.StreamWriter) -> None:
+async def echo_handler(reader: StreamReader, writer: StreamWriter) -> None:
     data = await reader.read(1024)
     if data:
         print(f"[server] Received: {data!r}")
         writer.write(data)
         await writer.drain()
-    await writer.aclose()
+    writer.close()
+    await writer.wait_closed()
 
 
 async def main() -> None:
@@ -32,7 +34,7 @@ async def main() -> None:
     print(f"[client] Sending: {message!r}")
     writer.write(message)
     await writer.drain()
-    await writer.write_eof()
+    writer.write_eof()
 
     # Receive echo
     response = await reader.read(1024)

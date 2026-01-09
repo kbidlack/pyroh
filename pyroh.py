@@ -1,11 +1,12 @@
 """pyroh: A friendly, minimalistic wrapper for iroh's Python bindings
 
-Provides asyncio-like StreamReader/StreamWriter interfaces for p2p connections.
+Provides standard asyncio.StreamReader/StreamWriter interfaces for p2p connections
+by wrapping iroh's QUIC streams.
 
 Architecture:
     Pyroh wraps iroh's QUIC-based primitives (Endpoint, Connection, BiStream)
-    in familiar asyncio interfaces. Each Connection can multiplex many BiStreams,
-    which we expose as (StreamReader, StreamWriter) pairs.
+    and provides asyncio.StreamReader/StreamWriter interfaces through custom
+    transport and protocol implementations.
 
 Example:
     import asyncio
@@ -21,6 +22,7 @@ Example:
 """
 
 import asyncio
+from asyncio import StreamReader, StreamWriter
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -31,8 +33,6 @@ __version__ = "0.1.0"
 
 __all__ = [
     "__version__",
-    "StreamReader",
-    "StreamWriter",
     "Connection",
     "Server",
     "connect",
@@ -51,7 +51,7 @@ NodeAddr = iroh.NodeAddr
 PublicKey = iroh.PublicKey
 NodeOptions = iroh.NodeOptions
 
-StreamHandler = Callable[["StreamReader", "StreamWriter"], Coroutine[Any, Any, None]]
+StreamHandler = Callable[[StreamReader, StreamWriter], Coroutine[Any, Any, None]]
 
 
 def setup_event_loop(loop: asyncio.AbstractEventLoop | None = None) -> None:
@@ -72,209 +72,365 @@ def node_addr(
     return NodeAddr(node_id, relay_url, addrs or [])
 
 
-class StreamReader:
-    """asyncio.StreamReader-compatible interface for iroh receive streams."""
+class QuicTransport(asyncio.Transport):
+    """asyncio Transport implementation wrapping iroh QUIC streams.
 
-    __slots__ = ("_recv", "_buffer", "_eof")
+    This transport implements the asyncio transport interface but reads data
+    on-demand rather than using a background read loop. This is necessary
+    because iroh's QUIC read() can block indefinitely if called before data
+    is available.
+    """
 
-    def __init__(self, recv: iroh.RecvStream) -> None:
+    _DEFAULT_HIGH_WATER = 64 * 1024
+    _DEFAULT_LOW_WATER = 16 * 1024
+
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        recv: iroh.RecvStream,
+        send: iroh.SendStream,
+        protocol: asyncio.Protocol,
+        reader: StreamReader,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        self._loop = loop
         self._recv = recv
-        self._buffer = bytearray()
-        self._eof = False
+        self._send = send
+        self._protocol = protocol
+        self._reader = reader
+        self._extra = extra or {}
+        self._closing = False
+        self._closed = False
+        # Write state
+        self._buffer: list[bytes] = []
+        self._buffer_size = 0
+        self._high_water = self._DEFAULT_HIGH_WATER
+        self._low_water = self._DEFAULT_LOW_WATER
+        self._paused = False
+        self._write_task: asyncio.Task[None] | None = None
+        self._eof_written = False
+
+    def get_extra_info(self, name: str, default: Any = None) -> Any:
+        return self._extra.get(name, default)
+
+    def is_closing(self) -> bool:
+        return self._closing
+
+    def close(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
+        self._schedule_write()
+
+    def set_protocol(self, protocol: asyncio.Protocol) -> None:
+        self._protocol = protocol
+
+    def get_protocol(self) -> asyncio.Protocol:
+        return self._protocol
+
+    # ReadTransport methods - these are no-ops since we read on-demand
+    def is_reading(self) -> bool:
+        return not self._closing
+
+    def pause_reading(self) -> None:
+        pass
+
+    def resume_reading(self) -> None:
+        pass
+
+    # WriteTransport methods
+    def set_write_buffer_limits(
+        self, high: int | None = None, low: int | None = None
+    ) -> None:
+        if high is None:
+            high = self._DEFAULT_HIGH_WATER
+        if low is None:
+            low = high // 4
+        self._high_water = high
+        self._low_water = low
+
+    def get_write_buffer_size(self) -> int:
+        return self._buffer_size
+
+    def get_write_buffer_limits(self) -> tuple[int, int]:
+        return (self._low_water, self._high_water)
+
+    def write(self, data: bytes) -> None:
+        if self._closing or self._eof_written:
+            return
+        if not data:
+            return
+        self._buffer.append(data)
+        self._buffer_size += len(data)
+        self._schedule_write()
+        self._maybe_pause_protocol()
+
+    def writelines(self, list_of_data: list[bytes]) -> None:
+        for data in list_of_data:
+            self.write(data)
+
+    def write_eof(self) -> None:
+        if self._eof_written:
+            return
+        self._eof_written = True
+        self._schedule_write()
+
+    def can_write_eof(self) -> bool:
+        return True
+
+    def abort(self) -> None:
+        self._closing = True
+        self._closed = True
+        self._buffer.clear()
+        self._buffer_size = 0
+        if self._write_task is not None:
+            self._write_task.cancel()
+        self._loop.create_task(self._abort_stream())
+
+    async def _abort_stream(self) -> None:
+        try:
+            await self._send.reset(0)
+        except Exception:
+            pass
+
+    def _schedule_write(self) -> None:
+        if self._write_task is None or self._write_task.done():
+            self._write_task = self._loop.create_task(self._do_write())
+
+    async def _do_write(self) -> None:
+        """Background task that flushes buffered data to QUIC."""
+        try:
+            # Yield to allow batching of multiple write() calls
+            await asyncio.sleep(0)
+
+            while self._buffer and not self._closed:
+                data = b"".join(self._buffer)
+                self._buffer.clear()
+                self._buffer_size = 0
+
+                try:
+                    await self._send.write_all(data)
+                except Exception:
+                    self._closed = True
+                    self._protocol.connection_lost(None)
+                    return
+
+                # Check if we should resume the protocol
+                if self._paused and self._buffer_size <= self._low_water:
+                    self._paused = False
+                    try:
+                        self._protocol.resume_writing()  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+
+            if self._eof_written and not self._closed:
+                try:
+                    await self._send.finish()
+                except Exception:
+                    pass
+
+            if self._closing and not self._buffer and not self._closed:
+                self._closed = True
+
+        except asyncio.CancelledError:
+            pass
+
+    def _maybe_pause_protocol(self) -> None:
+        if self._buffer_size >= self._high_water and not self._paused:
+            self._paused = True
+            try:
+                self._protocol.pause_writing()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+    async def _drain_helper(self) -> None:
+        """Wait until the write buffer is flushed."""
+        if self._closed:
+            raise ConnectionResetError("Connection lost")
+        # Wait for any pending write task to complete
+        if self._write_task is not None and not self._write_task.done():
+            await self._write_task
+
+    async def _read_from_quic(self, n: int) -> bytes:
+        """Read data from the QUIC recv stream."""
+        if self._closing or self._closed:
+            return b""
+        try:
+            data = await self._recv.read(n)
+            return data if data else b""
+        except Exception:
+            return b""
+
+
+class QuicStreamReader(StreamReader):
+    """StreamReader that reads from a QUIC recv stream on-demand.
+
+    This subclass overrides the standard StreamReader to pull data from
+    the QUIC stream when needed, rather than relying on a transport to
+    push data via feed_data().
+    """
+
+    def __init__(
+        self,
+        recv: iroh.RecvStream,
+        limit: int = 2**16,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None:
+        super().__init__(limit=limit)
+        self._quic_recv = recv
+        self._quic_eof = False
+
+    async def _fill_buffer(self, n: int = 65536) -> None:
+        """Read data from QUIC and feed it to the buffer."""
+        if self._quic_eof:
+            return
+        try:
+            data = await self._quic_recv.read(n)
+            if data:
+                self.feed_data(data)
+            else:
+                self._quic_eof = True
+                self.feed_eof()
+        except Exception:
+            self._quic_eof = True
+            self.feed_eof()
 
     async def read(self, n: int = -1) -> bytes:
-        """Read up to n bytes. If n is -1, read until EOF."""
-        if n == -1:
-            return await self.read_to_end()
+        """Read up to n bytes."""
         if n == 0:
             return b""
 
-        # Drain buffer first
-        if self._buffer:
-            data = bytes(self._buffer[:n])
-            del self._buffer[:n]
+        # If we need more data, read from QUIC
+        while not self._buffer and not self._eof:
+            await self._fill_buffer()
+            if self._eof:
+                break
+
+        if n < 0:
+            # Read all available
+            data = bytes(self._buffer)
+            self._buffer.clear()
             return data
 
-        if self._eof:
-            return b""
-
-        try:
-            chunk = await self._recv.read(max(n, 8192))
-            if not chunk:
-                self._eof = True
-                return b""
-            if len(chunk) <= n:
-                return chunk
-            self._buffer.extend(chunk[n:])
-            return chunk[:n]
-        except Exception:
-            self._eof = True
-            return b""
-
-    async def readexactly(self, n: int) -> bytes:
-        """Read exactly n bytes. Raises EOFError if stream ends early."""
-        data = await self._recv.read_exact(n)
-        if len(data) != n:
-            raise EOFError(f"Expected {n} bytes, got {len(data)}")
+        # Read up to n bytes from buffer
+        data = bytes(self._buffer[:n])
+        del self._buffer[:n]
         return data
 
     async def readline(self) -> bytes:
-        """Read until newline or EOF."""
+        """Read a line (until newline or EOF)."""
         line = bytearray()
         while True:
+            # Check if we have a newline in buffer
             if b"\n" in self._buffer:
                 idx = self._buffer.index(b"\n")
                 line.extend(self._buffer[: idx + 1])
                 del self._buffer[: idx + 1]
                 return bytes(line)
 
+            # Add buffer to line and clear it
             line.extend(self._buffer)
             self._buffer.clear()
 
             if self._eof:
                 return bytes(line)
 
-            try:
-                chunk = await self._recv.read(8192)
-                if not chunk:
-                    self._eof = True
-                    return bytes(line)
-                self._buffer.extend(chunk)
-            except Exception:
-                self._eof = True
-                return bytes(line)
+            # Read more data
+            await self._fill_buffer()
+
+    async def readexactly(self, n: int) -> bytes:
+        """Read exactly n bytes."""
+        data = bytearray()
+        while len(data) < n:
+            needed = n - len(data)
+            # Use buffer first
+            if self._buffer:
+                chunk = bytes(self._buffer[:needed])
+                del self._buffer[:needed]
+                data.extend(chunk)
+            elif self._eof:
+                raise asyncio.IncompleteReadError(bytes(data), n)
+            else:
+                await self._fill_buffer()
+
+        return bytes(data)
 
     async def readuntil(self, separator: bytes = b"\n") -> bytes:
-        """Read until separator is found. Raises EOFError if not found."""
+        """Read until separator is found."""
         data = bytearray()
         while True:
+            # Check if separator is in buffer
             if separator in self._buffer:
                 idx = self._buffer.index(separator)
                 data.extend(self._buffer[: idx + len(separator)])
                 del self._buffer[: idx + len(separator)]
                 return bytes(data)
 
+            # Add buffer to data
             data.extend(self._buffer)
             self._buffer.clear()
 
             if self._eof:
-                raise EOFError(f"Separator {separator!r} not found")
+                raise asyncio.IncompleteReadError(bytes(data), None)  # type: ignore[arg-type]
 
-            try:
-                chunk = await self._recv.read(8192)
-                if not chunk:
-                    self._eof = True
-                    raise EOFError(f"Separator {separator!r} not found")
-                self._buffer.extend(chunk)
-            except EOFError:
-                raise
-            except Exception:
-                self._eof = True
-                raise EOFError(f"Separator {separator!r} not found") from None
-
-    async def read_to_end(self, limit: int = 10 * 1024 * 1024) -> bytes:
-        """Read all remaining data until EOF."""
-        chunks = [bytes(self._buffer)] if self._buffer else []
-        self._buffer.clear()
-        if not self._eof:
-            try:
-                chunk = await self._recv.read_to_end(limit)
-                if chunk:
-                    chunks.append(chunk)
-            except Exception:
-                pass
-            self._eof = True
-        return b"".join(chunks)
-
-    def at_eof(self) -> bool:
-        """Return True if EOF reached and buffer empty."""
-        return self._eof and not self._buffer
+            await self._fill_buffer()
 
 
-class StreamWriter:
-    """asyncio.StreamWriter-compatible interface for iroh send streams."""
+class QuicStreamReaderProtocol(asyncio.StreamReaderProtocol):
+    """Protocol for QUIC streams with drain support."""
 
-    __slots__ = ("_send", "_pending", "_closing", "_drain_task")
+    def __init__(
+        self,
+        stream_reader: StreamReader,
+        client_connected_cb: Callable[..., Coroutine[Any, Any, None]] | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None:
+        super().__init__(stream_reader, client_connected_cb, loop)
+        self._closed = self._loop.create_future()
 
-    def __init__(self, send: iroh.SendStream) -> None:
-        self._send = send
-        self._pending: list[bytes] = []
-        self._closing = False
-        self._drain_task: asyncio.Task[None] | None = None
+    def connection_lost(self, exc: Exception | None) -> None:
+        super().connection_lost(exc)
+        if not self._closed.done():
+            if exc is None:
+                self._closed.set_result(None)
+            else:
+                self._closed.set_exception(exc)
 
-    def write(self, data: bytes) -> None:
-        """Buffer data for sending.
+    async def _drain_helper(self) -> None:
+        """Drain helper that works with our QuicTransport."""
+        if self._stream_reader is not None:
+            exc = self._stream_reader.exception()
+            if exc is not None:
+                raise exc
+        transport = self._transport
+        if transport is not None and isinstance(transport, QuicTransport):
+            await transport._drain_helper()
 
-        Like asyncio, this schedules an automatic drain when the event loop
-        gets a chance to run. Explicit drain() calls are still supported for
-        flow control.
-        """
-        if self._closing:
-            raise RuntimeError("Stream is closing")
-        self._pending.append(data)
-        self._schedule_drain()
+    async def _get_close_waiter(self, stream: StreamWriter) -> None:
+        await self._closed
 
-    def _schedule_drain(self) -> None:
-        """Schedule a drain to happen when the event loop runs."""
-        if self._drain_task is None or self._drain_task.done():
-            self._drain_task = asyncio.create_task(self._auto_drain())
 
-    async def _auto_drain(self) -> None:
-        """Automatically drain after yielding to the event loop."""
-        # Yield control to allow batching of multiple write() calls
-        await asyncio.sleep(0)
-        if self._pending and not self._closing:
-            await self._send.write_all(b"".join(self._pending))
-            self._pending.clear()
+async def open_quic_stream(
+    recv: iroh.RecvStream,
+    send: iroh.SendStream,
+    extra: dict[str, Any] | None = None,
+) -> tuple[StreamReader, StreamWriter]:
+    """Create asyncio StreamReader/StreamWriter pair from QUIC streams.
 
-    def writelines(self, lines: list[bytes]) -> None:
-        """Buffer multiple byte strings."""
-        if self._closing:
-            raise RuntimeError("Stream is closing")
-        self._pending.extend(lines)
-        self._schedule_drain()
+    This is the core function that wraps iroh's QUIC streams in standard
+    asyncio stream interfaces.
+    """
+    loop = asyncio.get_running_loop()
 
-    async def drain(self) -> None:
-        """Flush buffered data to the stream."""
-        # Cancel any pending auto-drain to avoid double-writing
-        if self._drain_task is not None and not self._drain_task.done():
-            self._drain_task.cancel()
-            try:
-                await self._drain_task
-            except asyncio.CancelledError:
-                pass
-        if self._pending:
-            await self._send.write_all(b"".join(self._pending))
-            self._pending.clear()
+    # Use our custom StreamReader that reads from QUIC on-demand
+    reader = QuicStreamReader(recv, limit=2**16, loop=loop)
+    protocol = QuicStreamReaderProtocol(reader, loop=loop)
 
-    async def write_eof(self) -> None:
-        """Signal end of stream (half-close)."""
-        await self.drain()
-        await self._send.finish()
-        self._closing = True
+    transport = QuicTransport(loop, recv, send, protocol, reader, extra)
+    protocol.connection_made(transport)
 
-    async def aclose(self) -> None:
-        """Close the stream gracefully."""
-        await self.write_eof()
-        await self._send.stopped()
-
-    def close(self) -> None:
-        """Mark stream as closing."""
-        self._closing = True
-
-    async def wait_closed(self) -> None:
-        """Wait for stream to fully close."""
-        if not self._closing:
-            await self.aclose()
-
-    def is_closing(self) -> bool:
-        return self._closing
-
-    def can_write_eof(self) -> bool:
-        return True
-
-    def get_extra_info(self, name: str, default: Any = None) -> Any:
-        return default
+    writer = StreamWriter(transport, protocol, reader, loop)
+    return reader, writer
 
 
 class Connection:
@@ -298,12 +454,12 @@ class Connection:
     async def open_stream(self) -> tuple[StreamReader, StreamWriter]:
         """Open a new bidirectional stream."""
         bi = await self._conn.open_bi()
-        return StreamReader(bi.recv()), StreamWriter(bi.send())
+        return await open_quic_stream(bi.recv(), bi.send())
 
     async def accept_stream(self) -> tuple[StreamReader, StreamWriter]:
         """Accept an incoming bidirectional stream."""
         bi = await self._conn.accept_bi()
-        return StreamReader(bi.recv()), StreamWriter(bi.send())
+        return await open_quic_stream(bi.recv(), bi.send())
 
     def close(self, code: int = 0, reason: bytes = b"") -> None:
         """Close the connection."""
@@ -334,8 +490,7 @@ class _ProtocolHandler:
         try:
             while True:
                 bi = await conn.accept_bi()
-                reader = StreamReader(bi.recv())
-                writer = StreamWriter(bi.send())
+                reader, writer = await open_quic_stream(bi.recv(), bi.send())
                 task = asyncio.create_task(self._run_handler(reader, writer))
                 self._tasks.add(task)
                 task.add_done_callback(self._tasks.discard)
@@ -350,7 +505,8 @@ class _ProtocolHandler:
         finally:
             if not writer.is_closing():
                 try:
-                    await writer.aclose()
+                    writer.close()
+                    await writer.wait_closed()
                 except Exception:
                     pass
 
@@ -430,7 +586,7 @@ class Server:
         if self._creator._instance:
             await self._creator._instance.shutdown()
 
-    async def __aenter__(self) -> Server:
+    async def __aenter__(self) -> "Server":
         return self
 
     async def __aexit__(self, *args: object) -> None:
@@ -484,7 +640,7 @@ async def connect(
         node: Existing Iroh node (creates ephemeral node if None)
 
     Returns:
-        Tuple of (StreamReader, StreamWriter)
+        Tuple of (asyncio.StreamReader, asyncio.StreamWriter)
     """
     setup_event_loop()
 
@@ -500,7 +656,7 @@ async def connect(
     conn = await endpoint.connect(addr, alpn)
     bi = await conn.open_bi()
 
-    return StreamReader(bi.recv()), StreamWriter(bi.send())
+    return await open_quic_stream(bi.recv(), bi.send())
 
 
 async def open_connection(
