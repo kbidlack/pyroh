@@ -231,6 +231,7 @@ class QuicTransport(asyncio.Transport):
 
             if self._closing and not self._buffer and not self._closed:
                 self._closed = True
+                self._protocol.connection_lost(None)
 
         except asyncio.CancelledError:
             pass
@@ -296,21 +297,21 @@ class QuicStreamReader(StreamReader):
             self.feed_eof()
 
     async def read(self, n: int = -1) -> bytes:
-        """Read up to n bytes."""
+        """Read up to n bytes, or read until EOF if n < 0."""
         if n == 0:
             return b""
 
-        # If we need more data, read from QUIC
-        while not self._buffer and not self._eof:
-            await self._fill_buffer()
-            if self._eof:
-                break
-
         if n < 0:
-            # Read all available
+            # Read until EOF
+            while not self._eof:
+                await self._fill_buffer()
             data = bytes(self._buffer)
             self._buffer.clear()
             return data
+
+        # Read up to n bytes - wait for at least some data or EOF
+        while not self._buffer and not self._eof:
+            await self._fill_buffer()
 
         # Read up to n bytes from buffer
         data = bytes(self._buffer[:n])
