@@ -503,13 +503,6 @@ class _ProtocolHandler:
             await self._handler(reader, writer)
         except Exception:
             pass
-        finally:
-            if not writer.is_closing():
-                try:
-                    writer.close()
-                    await writer.wait_closed()
-                except Exception:
-                    pass
 
     async def shutdown(self) -> None:
         """Shutdown the protocol handler."""
@@ -657,7 +650,8 @@ async def connect(
     conn = await endpoint.connect(addr, alpn)
     bi = await conn.open_bi()
 
-    return await open_quic_stream(bi.recv(), bi.send())
+    extra = {"iroh_node": iroh_node, "iroh_conn": conn}
+    return await open_quic_stream(bi.recv(), bi.send(), extra=extra)
 
 
 async def open_connection(
