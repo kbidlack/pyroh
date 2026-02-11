@@ -579,6 +579,7 @@ class Server:
         """Wait for server to fully close."""
         if self._creator._instance:
             await self._creator._instance.shutdown()
+        await self._node.node().shutdown()
 
     async def __aenter__(self) -> "Server":
         return self
