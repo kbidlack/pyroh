@@ -1,13 +1,31 @@
+[build-system]
+requires = ["maturin>=1.12,<2.0"]
+build-backend = "maturin"
+
 [project]
 name = "pyroh"
-version = "0.1.0"
-description = "Provides asyncio-like StreamReader/StreamWriter interfaces for p2p connections."
-readme = "README.md"
 requires-python = ">=3.14"
-dependencies = [
-    "iroh>=0.35.0",
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
 ]
+dynamic = ["version"]
 
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 
-[tool.setuptools]
-py-modules = ["pyroh"]
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+
+[tool.maturin]
+python-source = "." # ./pyroh
+module-name = "pyroh._iroh"
+features = ["pyo3/extension-module", "pyo3/abi3-py314"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+]
