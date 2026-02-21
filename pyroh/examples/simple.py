@@ -51,7 +51,7 @@ async def main():
     endpoint = await pyroh.Endpoint.bind(alpns=[ALPN])
     async with endpoint:
         server = endpoint.start_server(handle_connection)
-        addr = server.node_id
+        addr = server.id
         print(f"server listening at {addr}")
 
         await run_client(addr)
