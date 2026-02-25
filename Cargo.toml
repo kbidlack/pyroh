@@ -1,11 +1,11 @@
 [package]
 name = "pyroh"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [lib]
-name = "_iroh"
 crate-type = ["cdylib"]
+name = "_iroh"
 
 [dependencies]
 iroh = "0.96.1"

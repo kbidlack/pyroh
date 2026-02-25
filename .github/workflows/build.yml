@@ -1,22 +1,19 @@
 name: Build
-
 on:
   workflow_call:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   linux:
-    runs-on: ${{ matrix.platform.runner }}
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
         platform:
-          - runner: ubuntu-22.04
-            target: x86_64
-          - runner: ubuntu-22.04
-            target: aarch64
+          - target: x86_64
+            manylinux: manylinux_2_28
+          - target: aarch64
+            manylinux: manylinux_2_28
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -29,7 +26,7 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
           sccache: "true"
-          manylinux: auto
+          manylinux: ${{ matrix.platform.manylinux }}
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -37,14 +34,12 @@ jobs:
           path: dist
 
   musllinux:
-    runs-on: ${{ matrix.platform.runner }}
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
-        platform:
-          - runner: ubuntu-22.04
-            target: x86_64
-          - runner: ubuntu-22.04
-            target: aarch64
+        target:
+          - x86_64
+          - aarch64
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -54,14 +49,14 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.platform.target }}
+          target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
           sccache: "true"
           manylinux: musllinux_1_2
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-musllinux-${{ matrix.platform.target }}
+          name: wheels-musllinux-${{ matrix.target }}
           path: dist
 
   windows:
@@ -85,14 +80,12 @@ jobs:
           path: dist
 
   macos:
-    runs-on: ${{ matrix.platform.runner }}
+    runs-on: macos-latest # arm64 runner (free)
     strategy:
       matrix:
-        platform:
-          - runner: macos-15-intel
-            target: x86_64
-          - runner: macos-latest
-            target: aarch64
+        target:
+          - aarch64
+          - x86_64 # cross-compiled from arm64
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -102,13 +95,13 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.platform.target }}
+          target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
           sccache: "true"
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-${{ matrix.platform.target }}
+          name: wheels-macos-${{ matrix.target }}
           path: dist
 
   sdist:
