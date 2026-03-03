@@ -1,5 +1,5 @@
 use crate::connection::IrohConnection;
-use iroh::KeyParsingError;
+use iroh::{KeyParsingError, SecretKey};
 use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::sync::Arc;
@@ -13,10 +13,25 @@ pub struct IrohEndpoint {
 impl IrohEndpoint {
     /// bind a new endpoint that accepts connections using any of the given ALPNs
     #[staticmethod]
-    fn bind(py: Python<'_>, alpns: Vec<Vec<u8>>) -> PyResult<Bound<'_, PyAny>> {
+    #[pyo3(signature = (alpns, key=None))]
+    fn bind(
+        py: Python<'_>,
+        alpns: Vec<Vec<u8>>,
+        key: Option<Vec<u8>>,
+    ) -> PyResult<Bound<'_, PyAny>> {
         future_into_py(py, async move {
+            let secret_key = if let Some(key_bytes) = key {
+                let key_slice: [u8; 32] = key_bytes.try_into().map_err(|_| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>("key must be exactly 32 bytes")
+                })?;
+                SecretKey::from_bytes(&key_slice)
+            } else {
+                SecretKey::generate(&mut rand::rng())
+            };
+
             let ep = iroh::Endpoint::builder()
                 .alpns(alpns)
+                .secret_key(secret_key)
                 .bind()
                 .await
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
@@ -38,6 +53,11 @@ impl IrohEndpoint {
     #[getter]
     fn addr(&self) -> String {
         self.inner.addr().id.to_string()
+    }
+
+    #[getter]
+    fn secret_key(&self) -> [u8; 32] {
+        self.inner.secret_key().to_bytes()
     }
 
     /// accept the next incoming connection with any registered ALPN

@@ -16,9 +16,10 @@ class Endpoint:
     _endpoint: _iroh.IrohEndpoint
 
     @classmethod
-    # TODO: support custom keys
-    async def bind(cls, *, alpns: list[bytes] = [DEFAULT_ALPN]) -> Endpoint:
-        iendpoint = await _iroh.IrohEndpoint.bind(alpns)
+    async def bind(
+        cls, *, alpns: list[bytes] = [DEFAULT_ALPN], key: Optional[bytes] = None
+    ) -> Endpoint:
+        iendpoint = await _iroh.IrohEndpoint.bind(alpns=alpns, key=key)
         await iendpoint.wait_online()
         return cls(iendpoint)
 
@@ -29,6 +30,10 @@ class Endpoint:
     def id(self) -> str:
         """The endpoint's public key (node ID) as a string."""
         return self._endpoint.addr
+
+    @property
+    def secret_key(self) -> bytes:
+        return self._endpoint.secret_key
 
     async def connect(self, addr: str, *, alpn: bytes = DEFAULT_ALPN) -> Connection:
         rust_conn = await self._endpoint.connect(addr, alpn)

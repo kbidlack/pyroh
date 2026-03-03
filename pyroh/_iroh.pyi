@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from typing import final
-
+from typing import Optional, final
 
 @final
 class IrohSendStream:
@@ -32,7 +31,6 @@ class IrohSendStream:
         """
         ...
 
-
 @final
 class IrohRecvStream:
     """Read side of a QUIC stream."""
@@ -52,7 +50,6 @@ class IrohRecvStream:
                 was lost.
         """
         ...
-
 
 @final
 class IrohConnection:
@@ -113,7 +110,6 @@ class IrohConnection:
         """
         ...
 
-
 @final
 class IrohEndpoint:
     """A bound iroh QUIC endpoint.
@@ -122,11 +118,14 @@ class IrohEndpoint:
     """
 
     @staticmethod
-    async def bind(alpns: list[bytes]) -> IrohEndpoint:
+    async def bind(alpns: list[bytes], key: Optional[bytes]) -> IrohEndpoint:
         """Bind a new endpoint that accepts connections using any of the given ALPNs.
 
         Args:
             alpns: ALPN protocol labels to accept on the inbound side.
+            key: An optional private key for the endpoint, as raw bytes.
+                If provided, these bytes will be used as the node's private key / identity;
+                if None, a new private key will be generated for the endpoint.
 
         Raises:
             IOError: if the underlying endpoint cannot be bound.
@@ -144,6 +143,11 @@ class IrohEndpoint:
     @property
     def addr(self) -> str:
         """The endpoint's node ID (public key) as a hex string."""
+        ...
+
+    @property
+    def secret_key(self) -> bytes:
+        """The endpoint's secret key as a length 32 byte string."""
         ...
 
     async def accept(self) -> IrohConnection:
