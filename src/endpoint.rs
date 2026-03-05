@@ -56,8 +56,8 @@ impl IrohEndpoint {
     }
 
     #[getter]
-    fn secret_key(&self) -> [u8; 32] {
-        self.inner.secret_key().to_bytes()
+    fn secret_key(&self) -> Vec<u8> {
+        self.inner.secret_key().to_bytes().to_vec()
     }
 
     /// accept the next incoming connection with any registered ALPN
