@@ -75,6 +75,11 @@ class IrohConnection:
         """The ALPN protocol label negotiated for this connection."""
         ...
 
+    @property
+    def remote_node_id(self) -> str:
+        """The node ID (public key) of the remote peer as a hex string."""
+        ...
+
     async def open_bi(self) -> tuple[IrohSendStream, IrohRecvStream]:
         """Open a bidirectional stream initiated by this side.
 

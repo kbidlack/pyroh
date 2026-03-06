@@ -187,6 +187,11 @@ class Connection:
             IrohStreamTransport | IrohSendTransport | IrohRecvTransport
         ] = set()
 
+    @property
+    def remote_node_id(self) -> str:
+        """The node ID (public key) of the remote peer as a hex string."""
+        return self._conn.remote_node_id
+
     async def open_bi(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         """Open a bidirectional stream initiated by this side.
 

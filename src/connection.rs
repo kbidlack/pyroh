@@ -60,6 +60,11 @@ impl IrohConnection {
         self.inner.alpn().to_vec()
     }
 
+    #[getter]
+    fn remote_node_id(&self) -> String {
+        self.inner.remote_id().to_string()
+    }
+
     fn close<'py>(
         &self,
         py: Python<'py>,
