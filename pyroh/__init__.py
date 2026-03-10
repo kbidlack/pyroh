@@ -1,3 +1,3 @@
-from .core import Connection, Endpoint, Server
+from .core import Connection, Endpoint, SecretKey, Server
 
-__all__ = ("Connection", "Endpoint", "Server")
+__all__ = ("Connection", "Endpoint", "SecretKey", "Server")

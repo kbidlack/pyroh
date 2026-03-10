@@ -66,7 +66,7 @@ async def main():
                 f"opening {NUM_STREAMS} bi streams + 1 uni stream over one connection..."
             )
             results = await asyncio.gather(
-                *[open_bi_stream(conn, i) for i in range(NUM_STREAMS)],  # type: ignore
+                *[open_bi_stream(conn, i) for i in range(NUM_STREAMS)],
                 open_uni_stream(conn),
             )
 

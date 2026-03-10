@@ -10,6 +10,85 @@ DEFAULT_ALPN = b"pyroh/1"
 type ConnectionHandler = Callable[[Connection], Coroutine[Any, Any, Any]]
 
 
+class SecretKey:
+    """An Ed25519 secret key representing a node's identity.
+
+    Use :meth:`generate` to create a new random key, or :meth:`from_bytes`
+    to restore a previously saved key::
+
+        # Generate a fresh key
+        key = pyroh.SecretKey.generate()
+        print(key.node_id)       # hex string node ID
+        print(key.node_id_bytes) # raw 32-byte public key
+
+        # Persist and restore
+        saved = bytes(key)
+        key = pyroh.SecretKey.from_bytes(saved)
+
+    Pass to :meth:`Endpoint.bind` to use a stable node identity::
+
+        endpoint = await pyroh.Endpoint.bind(key=bytes(key))
+    """
+
+    _key: _iroh.IrohSecretKey
+
+    def __init__(self, inner: _iroh.IrohSecretKey) -> None:
+        self._key = inner
+
+    @classmethod
+    def generate(cls) -> SecretKey:
+        """Generate a new random secret key.
+
+        Returns:
+            A freshly generated :class:`SecretKey`.
+        """
+        return cls(_iroh.IrohSecretKey.generate())
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> SecretKey:
+        """Restore a secret key from its 32-byte representation.
+
+        Args:
+            data: The 32-byte secret key, as previously returned by
+                  ``bytes(key)`` or :meth:`to_bytes`.
+
+        Returns:
+            The corresponding :class:`SecretKey`.
+
+        Raises:
+            ValueError: if ``data`` is not exactly 32 bytes.
+        """
+        return cls(_iroh.IrohSecretKey.from_bytes(data))
+
+    def to_bytes(self) -> bytes:
+        """Return the secret key as 32 raw bytes.
+
+        Store these to persist the key across process restarts and pass
+        them back to :meth:`from_bytes` to restore it.
+        """
+        return bytes(self._key.to_bytes())
+
+    @property
+    def node_id(self) -> str:
+        """The node ID (public key) derived from this secret key, as a hex string.
+
+        This is the address remote peers use to connect to an endpoint
+        that uses this key.
+        """
+        return self._key.node_id
+
+    @property
+    def node_id_bytes(self) -> bytes:
+        """The node ID (public key) derived from this secret key, as 32 raw bytes."""
+        return bytes(self._key.node_id_bytes)
+
+    def __bytes__(self) -> bytes:
+        return self.to_bytes()
+
+    def __repr__(self) -> str:
+        return f"SecretKey(node_id={self.node_id})"
+
+
 class Endpoint:
     """A local iroh QUIC endpoint with a stable node identity.
 
@@ -31,9 +110,9 @@ class Endpoint:
         cls,
         *,
         alpns: list[bytes] = [DEFAULT_ALPN],
-        key: Optional[bytes] = None,
+        key: Optional[SecretKey] = None,
         wait_online: bool = True,
-    ) -> "Endpoint":
+    ) -> Endpoint:
         """Bind a new endpoint to the network.
 
         By default, blocks until the endpoint has contacted a relay and is
@@ -62,7 +141,8 @@ class Endpoint:
             ValueError: if ``key`` is provided but is not exactly 32 bytes.
             OSError:    if the underlying endpoint cannot be bound.
         """
-        iendpoint = await _iroh.IrohEndpoint.bind(alpns=alpns, key=key)
+        key_bytes = key.to_bytes() if key is not None else None
+        iendpoint = await _iroh.IrohEndpoint.bind(alpns=alpns, key=key_bytes)
         ep = cls(iendpoint)
         if wait_online:
             await ep.wait_online()
@@ -93,15 +173,15 @@ class Endpoint:
         return self._endpoint.addr
 
     @property
-    def secret_key(self) -> bytes:
+    def secret_key(self) -> SecretKey:
         """The endpoint's 32-byte secret key.
 
         Store this and pass it back to :meth:`bind` as ``key`` to reuse
         the same node ID across process restarts.
         """
-        return self._endpoint.secret_key
+        return SecretKey.from_bytes(self._endpoint.secret_key)
 
-    async def connect(self, addr: str, *, alpn: bytes = DEFAULT_ALPN) -> "Connection":
+    async def connect(self, addr: str, *, alpn: bytes = DEFAULT_ALPN) -> Connection:
         """Connect to a remote iroh peer by node ID.
 
         Args:
@@ -132,7 +212,7 @@ class Endpoint:
         """
         self._endpoint.set_alpns(alpns)
 
-    def start_server(self, handler: ConnectionHandler) -> "Server":
+    def start_server(self, handler: ConnectionHandler) -> Server:
         """Start accepting incoming connections in a background task.
 
         Each accepted connection is passed to ``handler`` as an independent
@@ -152,7 +232,7 @@ class Endpoint:
         server.start(handler)
         return server
 
-    async def __aenter__(self) -> "Endpoint":
+    async def __aenter__(self) -> Endpoint:
         return self
 
     async def __aexit__(self, *args):
@@ -183,6 +263,7 @@ class Connection:
     def __init__(self, rust_conn: _iroh.IrohConnection):
         self._conn = rust_conn
 
+        # (for now?) does not clean up on individual stream close, only on self.close()
         self._transports: set[
             IrohStreamTransport | IrohSendTransport | IrohRecvTransport
         ] = set()
@@ -380,14 +461,14 @@ class Server:
         """
         self._closed = True
 
-    async def __aenter__(self) -> "Server":
+    async def __aenter__(self) -> Server:
         return self
 
     async def __aexit__(self, *args):
         self.close()
 
     # just in case since we can
-    def __enter__(self) -> "Server":
+    def __enter__(self) -> Server:
         return self
 
     def __exit__(self, *args):

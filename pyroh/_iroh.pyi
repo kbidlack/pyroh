@@ -3,6 +3,66 @@ from __future__ import annotations
 from typing import Optional, final
 
 @final
+class IrohSecretKey:
+    """An Ed25519 secret key representing a node's identity.
+
+    Use :meth:`generate` to create a new random key, or :meth:`from_bytes`
+    to restore a previously saved key. The corresponding node ID (public key)
+    is available as :attr:`node_id` (hex string) or :attr:`node_id_bytes`
+    (raw bytes).
+    """
+
+    @staticmethod
+    def generate() -> IrohSecretKey:
+        """Generate a new random secret key.
+
+        Returns:
+            A freshly generated :class:`IrohSecretKey`.
+        """
+        ...
+
+    @staticmethod
+    def from_bytes(bytes: bytes) -> IrohSecretKey:
+        """Restore a secret key from its 32-byte representation.
+
+        Args:
+            bytes: The 32-byte secret key, as previously returned by
+                   :meth:`to_bytes`.
+
+        Returns:
+            The corresponding :class:`IrohSecretKey`.
+
+        Raises:
+            ValueError: if ``bytes`` is not exactly 32 bytes.
+        """
+        ...
+
+    def to_bytes(self) -> bytes:
+        """Return the secret key as 32 raw bytes.
+
+        Store these to persist the key across process restarts and pass
+        them back to :meth:`from_bytes` to restore it.
+        """
+        ...
+
+    @property
+    def node_id(self) -> str:
+        """The node ID (public key) derived from this secret key, as a hex string.
+
+        This is the address remote peers use to connect to an endpoint
+        that uses this key.
+        """
+        ...
+
+    @property
+    def node_id_bytes(self) -> bytes:
+        """The node ID (public key) derived from this secret key, as 32 raw bytes."""
+        ...
+
+    def __repr__(self) -> str: ...
+    def __bytes__(self) -> bytes: ...
+
+@final
 class IrohSendStream:
     """Write side of a QUIC stream."""
 

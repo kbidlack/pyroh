@@ -49,7 +49,8 @@ async def run_client(addr: str):
 
 async def main():
     endpoint = await pyroh.Endpoint.bind(
-        alpns=[ALPN], key=b"thisisasecretkeythatis32bytes..."
+        alpns=[ALPN],
+        key=pyroh.SecretKey.from_bytes(b"thisisasecretkeythatis32bytes..."),
     )
     async with endpoint:
         server = endpoint.start_server(handle_connection)
