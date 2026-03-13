@@ -1,5 +1,6 @@
 [project]
 name = "pyroh"
+description = "A friendly, asyncio-like Python wrapper for Iroh"
 readme = "README.md"
 requires-python = ">=3.14"
 classifiers = [
