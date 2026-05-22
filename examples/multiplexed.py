@@ -58,9 +58,10 @@ async def main():
 
     async with server_ep, client_ep:
         server = server_ep.start_server(handle_connection)
-        print(f"server: {server_ep.id}")
+        print(f"server id: {server_ep.id}")
+        print(f"server addr: {server_ep.addr}")
 
-        conn = await client_ep.connect(server_ep.id)
+        conn = await client_ep.connect(server_ep.addr)
         async with conn:
             print(
                 f"opening {NUM_STREAMS} bi streams + 1 uni stream over one connection..."

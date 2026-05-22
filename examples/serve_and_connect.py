@@ -47,16 +47,20 @@ async def main():
         server_a = ep_a.start_server(lambda conn: handle_connection(conn, "A"))
         server_b = ep_b.start_server(lambda conn: handle_connection(conn, "B"))
 
-        print(f"endpoint A: {ep_a.id}")
-        print(f"endpoint B: {ep_b.id}")
+        print(f"endpoint A id: {ep_a.id}")
+        print(f"endpoint A addr: {ep_a.addr}")
+        print(f"endpoint A ticket: {ep_a.ticket}")
+        print(f"endpoint B id: {ep_b.id}")
+        print(f"endpoint B addr: {ep_b.addr}")
+        print(f"endpoint B ticket: {ep_b.ticket}")
 
-        async def connect_and_send(ep, remote_id, message):
-            conn = await ep.connect(remote_id)
+        async def connect_and_send(ep, remote_addr, message):
+            conn = await ep.connect(remote_addr)
             return await send_message(conn, message)
 
         resp_a, resp_b = await asyncio.gather(
-            connect_and_send(ep_a, ep_b.id, b"hello from A"),
-            connect_and_send(ep_b, ep_a.id, b"hello from B"),
+            connect_and_send(ep_a, ep_b.ticket, b"hello from A"),
+            connect_and_send(ep_b, ep_a.ticket, b"hello from B"),
         )
 
         print(f"A got: {resp_a!r}")

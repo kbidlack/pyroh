@@ -48,14 +48,14 @@ async def main():
     async with server:
         srv = server.start_server(handle_connection)
 
-        # Bind a client endpoint and connect by node ID.
+        # Bind a client endpoint and connect by full address or ticket.
         # By default, this hangs until the endpoint is online.
         # You can disable this behavior by doing
         # `endpoint = await pyroh.Endpoint.bind(wait_online=False)`
         # and then awaiting `endpoint.wait_online()` later
         client = await pyroh.Endpoint.bind(alpns=[ALPN])
         async with client:
-            conn = await client.connect(server.id, alpn=ALPN)
+            conn = await client.connect(server.ticket, alpn=ALPN)
             async with conn:
                 reader, writer = await conn.open_bi()
                 writer.write(b"hello")
@@ -88,16 +88,18 @@ endpoint = await pyroh.Endpoint.bind(
 
 #### Properties
 
-| Property     | Type    | Description                                                                                              |
-| ------------ | ------- | -------------------------------------------------------------------------------------------------------- |
-| `id`         | `str`   | Node ID (public key) as a hex string. Pass this to remote peers so they can connect.                     |
-| `secret_key` | `bytes` | The 32-byte secret key for this endpoint's identity. Store it to reuse the same node ID across restarts. |
+| Property     | Type           | Description                                                                                              |
+| ------------ | -------------- | -------------------------------------------------------------------------------------------------------- |
+| `id`         | `str`          | Node ID (public key) as a hex string. Requires discovery to connect directly.                            |
+| `addr`       | `EndpointAddr` | Full endpoint address (node ID + relay/direct addresses). Use this without discovery.                    |
+| `ticket`     | `str`          | Serialized endpoint ticket for sharing full address info.                                                |
+| `secret_key` | `bytes`        | The 32-byte secret key for this endpoint's identity. Store it to reuse the same node ID across restarts. |
 
 #### Methods
 
 | Method                                              | Description                                                                                                          |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `await endpoint.connect(addr, *, alpn=b"pyroh/1")`  | Connect to a remote peer by node ID string. Returns a `Connection`.                                                  |
+| `await endpoint.connect(addr, *, alpn=b"pyroh/1")`  | Connect to a remote peer by node ID, `EndpointAddr`, or endpoint ticket string. Returns a `Connection`.              |
 | `endpoint.start_server(handler)`                    | Start accepting connections, calling `handler(conn)` for each one. Returns a `Server`.                               |
 | `await endpoint.wait_online()`                      | Wait until the endpoint has contacted a relay and is reachable. Only needed when `bind(wait_online=False)` was used. |
 | `endpoint.set_alpns(alpns)`                         | Update the set of accepted ALPNs at runtime (e.g. for protocol upgrades).                                            |

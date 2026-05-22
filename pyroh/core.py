@@ -1,5 +1,7 @@
 import asyncio
+import json
 from collections.abc import Callable, Coroutine
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from . import _iroh
@@ -8,6 +10,65 @@ from ._transport import IrohRecvTransport, IrohSendTransport, IrohStreamTranspor
 DEFAULT_ALPN = b"pyroh/1"
 
 type ConnectionHandler = Callable[[Connection], Coroutine[Any, Any, Any]]
+
+
+@dataclass(frozen=True)
+class EndpointAddrEntry:
+    """A single address entry inside an EndpointAddr."""
+
+    kind: str
+    value: str
+
+
+@dataclass(frozen=True)
+class EndpointAddr:
+    """Dial information for an endpoint.
+
+    Includes the endpoint's node ID plus optional relay and direct address
+    details. When built from full address info, this is the most reliable
+    way to connect without discovery.
+    """
+
+    id: str
+    addrs: tuple[EndpointAddrEntry, ...]
+    raw: str = field(repr=False)
+    kind: str = field(default="json", repr=False)
+
+    @classmethod
+    def from_json(cls, raw: str) -> "EndpointAddr":
+        data = json.loads(raw)
+        node_id = data.get("id")
+        if not isinstance(node_id, str):
+            raise ValueError("EndpointAddr JSON is missing a string 'id' field")
+
+        entries: list[EndpointAddrEntry] = []
+        addrs = data.get("addrs", [])
+        if isinstance(addrs, list):
+            for addr in addrs:
+                if isinstance(addr, dict) and len(addr) == 1:
+                    kind, value = next(iter(addr.items()))
+                    entries.append(EndpointAddrEntry(kind=str(kind), value=str(value)))
+                else:
+                    entries.append(
+                        EndpointAddrEntry(kind="Unknown", value=json.dumps(addr))
+                    )
+
+        return cls(id=node_id, addrs=tuple(entries), raw=raw, kind="json")
+
+    @classmethod
+    def from_id(cls, node_id: str) -> "EndpointAddr":
+        return cls(id=node_id, addrs=tuple(), raw=node_id, kind="id")
+
+    def to_json(self) -> str:
+        """Return the dial string to pass to connect().
+
+        For full addresses this is the JSON form; for ID-only addresses this
+        is just the node ID.
+        """
+        return self.raw
+
+    def __str__(self) -> str:
+        return self.raw
 
 
 class SecretKey:
@@ -72,8 +133,9 @@ class SecretKey:
     def node_id(self) -> str:
         """The node ID (public key) derived from this secret key, as a hex string.
 
-        This is the address remote peers use to connect to an endpoint
-        that uses this key.
+        This is a stable identifier for the endpoint. If address discovery
+        is configured, peers can connect using just this value. Otherwise
+        they will need a full :class:`EndpointAddr` or ticket.
         """
         return self._key.node_id
 
@@ -93,8 +155,9 @@ class Endpoint:
     """A local iroh QUIC endpoint with a stable node identity.
 
     Each endpoint has a keypair; the public half is the *node ID*, which
-    remote peers use to connect. iroh handles NAT traversal and relay
-    fallback automatically — no IP address configuration required.
+    is a stable identifier. If address discovery is configured, remote
+    peers can connect using just the node ID. Otherwise share the full
+    :attr:`addr` or :attr:`ticket`.
 
     Create with :meth:`bind`. Use as an async context manager to ensure
     the endpoint is closed on exit::
@@ -168,9 +231,46 @@ class Endpoint:
     def id(self) -> str:
         """The endpoint's node ID (public key) as a hex string.
 
-        This is the address remote peers need in order to connect.
+        This is a stable identifier for the endpoint. If address discovery
+        is enabled, peers can connect using just this value. Otherwise
+        share :attr:`addr` or :attr:`ticket`.
         """
         return self._endpoint.addr
+
+    @property
+    def addr(self) -> EndpointAddr:
+        """The endpoint address (node ID + optional relay/direct addresses).
+
+        If the underlying iroh binding exposes full address info, this
+        includes the relay URL and direct IP addresses. Otherwise it falls
+        back to an ID-only address (discovery required).
+        """
+        addr_info = getattr(self._endpoint, "addr_info", None)
+        if callable(addr_info):
+            return EndpointAddr.from_json(addr_info())
+        return EndpointAddr.from_id(self._endpoint.addr)
+
+    @property
+    def addr_json(self) -> Optional[str]:
+        """Return the raw JSON address info if available, else ``None``."""
+        addr_info = getattr(self._endpoint, "addr_info", None)
+        if callable(addr_info):
+            return addr_info()
+        return None
+
+    @property
+    def ticket(self) -> str:
+        """A serialized endpoint ticket suitable for copy/paste sharing.
+
+        Tickets embed the endpoint address and can be handed to remote
+        peers to connect without additional discovery.
+        """
+        ticket = getattr(self._endpoint, "ticket", None)
+        if ticket is None:
+            raise NotImplementedError(
+                "endpoint tickets are not supported by this pyroh build"
+            )
+        return ticket
 
     @property
     def secret_key(self) -> SecretKey:
@@ -181,12 +281,16 @@ class Endpoint:
         """
         return SecretKey.from_bytes(self._endpoint.secret_key)
 
-    async def connect(self, addr: str, *, alpn: bytes = DEFAULT_ALPN) -> Connection:
-        """Connect to a remote iroh peer by node ID.
+    async def connect(
+        self, addr: str | EndpointAddr, *, alpn: bytes = DEFAULT_ALPN
+    ) -> Connection:
+        """Connect to a remote iroh peer.
 
         Args:
-            addr: Node ID of the remote peer as a hex string (the value of
-                  the remote endpoint's :attr:`id` property).
+            addr: Remote address information. This can be:
+                  - a node ID hex string (requires address discovery),
+                  - an :class:`EndpointAddr` instance (full dial info), or
+                  - a serialized endpoint ticket string.
             alpn: ALPN protocol label to use. The remote endpoint must have
                   registered this label. Defaults to ``b"pyroh/1"``.
 
@@ -194,11 +298,12 @@ class Endpoint:
             An established :class:`Connection`.
 
         Raises:
-            ValueError: if ``addr`` cannot be parsed as a node ID.
+            ValueError: if ``addr`` cannot be parsed.
             OSError:    if the connection attempt fails (e.g. peer
                         unreachable, ALPN rejected).
         """
-        rust_conn = await self._endpoint.connect(addr, alpn)
+        addr_value = addr.to_json() if isinstance(addr, EndpointAddr) else addr
+        rust_conn = await self._endpoint.connect(addr_value, alpn)
         return Connection(rust_conn)
 
     def set_alpns(self, alpns: list[bytes]) -> None:
@@ -394,6 +499,14 @@ class Server:
     def id(self) -> str:
         """Node ID of the underlying endpoint (same as ``Endpoint.id``)."""
         return self._endpoint.addr
+
+    @property
+    def addr(self) -> EndpointAddr:
+        """Address of the underlying endpoint (same as ``Endpoint.addr``)."""
+        addr_info = getattr(self._endpoint, "addr_info", None)
+        if callable(addr_info):
+            return EndpointAddr.from_json(addr_info())
+        return EndpointAddr.from_id(self._endpoint.addr)
 
     async def _accept(self) -> Connection:
         if self._closed:

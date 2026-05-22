@@ -12,7 +12,7 @@ impl IrohSecretKey {
     #[staticmethod]
     fn generate() -> IrohSecretKey {
         IrohSecretKey {
-            inner: SecretKey::generate(&mut rand::rng()),
+            inner: SecretKey::generate(),
         }
     }
 

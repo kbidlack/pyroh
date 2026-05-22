@@ -8,8 +8,10 @@ crate-type = ["cdylib"]
 name = "_iroh"
 
 [dependencies]
-iroh = "0.96.1"
+iroh = "0.98.2"
+iroh-tickets = "0.5.0"
 pyo3 = "0.28.2"
 pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
-rand = "0.9.2"
+
+serde_json = "1.0"
 tokio = "1.49.0"

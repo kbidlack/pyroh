@@ -49,8 +49,9 @@ class IrohSecretKey:
     def node_id(self) -> str:
         """The node ID (public key) derived from this secret key, as a hex string.
 
-        This is the address remote peers use to connect to an endpoint
-        that uses this key.
+        This is a stable identifier for the endpoint. If address discovery
+        is configured, peers can connect using just this value. Otherwise
+        they will need a full EndpointAddr or ticket.
         """
         ...
 
@@ -248,8 +249,23 @@ class IrohEndpoint:
     def addr(self) -> str:
         """The endpoint's node ID (public key) as a hex string.
 
-        This is the address remote peers need in order to connect.
+        This is a stable identifier for the endpoint. If address discovery
+        is enabled, peers can connect using just this value. Otherwise
+        they need full address info (see :meth:`addr_info`) or a ticket.
         """
+        ...
+
+    def addr_info(self) -> str:
+        """Return the full endpoint address info as a JSON string.
+
+        Includes relay and direct address information suitable for dialing
+        without discovery.
+        """
+        ...
+
+    @property
+    def ticket(self) -> str:
+        """A serialized endpoint ticket suitable for sharing."""
         ...
 
     @property
@@ -276,8 +292,9 @@ class IrohEndpoint:
         """Connect to a remote iroh peer.
 
         Args:
-            addr: Node ID of the remote peer as a hex string (the value of
-                  the remote endpoint's :attr:`addr` property).
+            addr: Remote address information as a string. This may be a node
+                  ID hex string (requires discovery), a serialized endpoint
+                  address JSON, or an endpoint ticket string.
             alpn: ALPN protocol label to use for this connection. The remote
                   endpoint must have registered this ALPN.
 

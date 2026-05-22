@@ -25,7 +25,7 @@ async def handle_connection(conn: pyroh.Connection) -> None:
     print(f"  server received uni: {notif!r}")
 
 
-async def run_client(addr: str):
+async def run_client(addr: str | pyroh.EndpointAddr):
     endpoint = await pyroh.Endpoint.bind(alpns=[ALPN])
     async with endpoint:
         conn = await endpoint.connect(addr, alpn=ALPN)
@@ -54,8 +54,9 @@ async def main():
     )
     async with endpoint:
         server = endpoint.start_server(handle_connection)
-        addr = server.id
-        print(f"server listening at {addr}")
+        addr = endpoint.addr
+        print(f"server id: {endpoint.id}")
+        print(f"server addr: {addr}")
 
         await run_client(addr)
         server.close()

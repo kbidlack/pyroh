@@ -1,5 +1,6 @@
 use crate::connection::IrohConnection;
-use iroh::{KeyParsingError, SecretKey};
+use iroh::{EndpointAddr, EndpointId, KeyParsingError, SecretKey};
+use iroh_tickets::endpoint::EndpointTicket;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::sync::Arc;
@@ -26,10 +27,10 @@ impl IrohEndpoint {
                 })?;
                 SecretKey::from_bytes(&key_slice)
             } else {
-                SecretKey::generate(&mut rand::rng())
+                SecretKey::generate()
             };
 
-            let ep = iroh::Endpoint::builder()
+            let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
                 .alpns(alpns)
                 .secret_key(secret_key)
                 .bind()
@@ -53,6 +54,18 @@ impl IrohEndpoint {
     #[getter]
     fn addr(&self) -> String {
         self.inner.addr().id.to_string()
+    }
+
+    /// full endpoint address info as JSON
+    fn addr_info(&self) -> PyResult<String> {
+        serde_json::to_string(&self.inner.addr())
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+    }
+
+    /// endpoint ticket string
+    #[getter]
+    fn ticket(&self) -> String {
+        EndpointTicket::new(self.inner.addr()).to_string()
     }
 
     #[getter]
@@ -85,11 +98,20 @@ impl IrohEndpoint {
     ) -> PyResult<Bound<'py, PyAny>> {
         let ep = self.inner.clone();
         future_into_py(py, async move {
-            let node_addr: iroh::EndpointId = addr.parse().map_err(|e: KeyParsingError| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-            })?;
+            let endpoint_addr: EndpointAddr =
+                if let Ok(addr) = serde_json::from_str::<EndpointAddr>(&addr) {
+                    addr
+                } else if let Ok(ticket) = addr.parse::<EndpointTicket>() {
+                    EndpointAddr::from(ticket)
+                } else {
+                    let node_id: EndpointId = addr.parse().map_err(|e: KeyParsingError| {
+                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+                    })?;
+                    node_id.into()
+                };
+
             let conn = ep
-                .connect(node_addr, &alpn)
+                .connect(endpoint_addr, &alpn)
                 .await
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
             Ok(IrohConnection {
