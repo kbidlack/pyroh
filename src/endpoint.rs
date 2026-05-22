@@ -5,6 +5,16 @@ use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::sync::Arc;
 
+#[pyfunction]
+pub fn endpoint_addr_from_ticket(ticket: &str) -> PyResult<String> {
+    let ticket = ticket
+        .parse::<EndpointTicket>()
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let addr = EndpointAddr::from(ticket);
+    serde_json::to_string(&addr)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+}
+
 #[pyclass]
 pub struct IrohEndpoint {
     inner: iroh::Endpoint,

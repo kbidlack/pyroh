@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Optional, final
 
+def endpoint_addr_from_ticket(ticket: str) -> str:
+    """Parse an endpoint ticket into an endpoint address JSON string."""
+    ...
 @final
 class IrohSecretKey:
     """An Ed25519 secret key representing a node's identity.

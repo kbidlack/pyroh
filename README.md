@@ -107,6 +107,20 @@ endpoint = await pyroh.Endpoint.bind(
 
 ---
 
+### `pyroh.EndpointAddr`
+
+Represents full dial information (node ID + optional relay/direct addresses).
+
+#### Class methods
+
+| Method                             | Description                                                    |
+| ---------------------------------- | -------------------------------------------------------------- |
+| `EndpointAddr.from_json(raw)`      | Parse full address info from JSON (e.g. `Endpoint.addr_json`). |
+| `EndpointAddr.from_id(node_id)`    | Create an ID-only address (discovery required).                |
+| `EndpointAddr.from_ticket(ticket)` | Parse a serialized endpoint ticket into full address info.     |
+
+---
+
 ### `pyroh.Connection`
 
 A QUIC connection to a remote peer. Connections multiplex streams — open as many as you need without the overhead of new connections.

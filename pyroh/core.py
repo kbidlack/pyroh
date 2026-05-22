@@ -35,7 +35,7 @@ class EndpointAddr:
     kind: str = field(default="json", repr=False)
 
     @classmethod
-    def from_json(cls, raw: str) -> "EndpointAddr":
+    def from_json(cls, raw: str) -> EndpointAddr:
         data = json.loads(raw)
         node_id = data.get("id")
         if not isinstance(node_id, str):
@@ -56,8 +56,24 @@ class EndpointAddr:
         return cls(id=node_id, addrs=tuple(entries), raw=raw, kind="json")
 
     @classmethod
-    def from_id(cls, node_id: str) -> "EndpointAddr":
+    def from_id(cls, node_id: str) -> EndpointAddr:
         return cls(id=node_id, addrs=tuple(), raw=node_id, kind="id")
+
+    @classmethod
+    def from_ticket(cls, ticket: str) -> EndpointAddr:
+        """Parse an endpoint ticket into an EndpointAddr.
+
+        Args:
+            ticket: A serialized endpoint ticket (e.g. from ``Endpoint.ticket``).
+
+        Returns:
+            An :class:`EndpointAddr` containing full dial information.
+
+        Raises:
+            ValueError: if the ticket cannot be parsed.
+        """
+        raw = _iroh.endpoint_addr_from_ticket(ticket)
+        return cls.from_json(raw)
 
     def to_json(self) -> str:
         """Return the dial string to pass to connect().
@@ -245,18 +261,12 @@ class Endpoint:
         includes the relay URL and direct IP addresses. Otherwise it falls
         back to an ID-only address (discovery required).
         """
-        addr_info = getattr(self._endpoint, "addr_info", None)
-        if callable(addr_info):
-            return EndpointAddr.from_json(addr_info())
-        return EndpointAddr.from_id(self._endpoint.addr)
+        return EndpointAddr.from_json(self._endpoint.addr_info())
 
     @property
     def addr_json(self) -> Optional[str]:
         """Return the raw JSON address info if available, else ``None``."""
-        addr_info = getattr(self._endpoint, "addr_info", None)
-        if callable(addr_info):
-            return addr_info()
-        return None
+        return self._endpoint.addr_info()
 
     @property
     def ticket(self) -> str:
@@ -265,12 +275,7 @@ class Endpoint:
         Tickets embed the endpoint address and can be handed to remote
         peers to connect without additional discovery.
         """
-        ticket = getattr(self._endpoint, "ticket", None)
-        if ticket is None:
-            raise NotImplementedError(
-                "endpoint tickets are not supported by this pyroh build"
-            )
-        return ticket
+        return self._endpoint.ticket
 
     @property
     def secret_key(self) -> SecretKey:
